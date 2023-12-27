@@ -92,83 +92,136 @@ const getConfig = ({ baseUrl, rootPath, s3Options, ...legacyS3Options }) => {
 const index = {
   init({ baseUrl, rootPath, s3Options, ...legacyS3Options }) {
     const config = getConfig({ baseUrl, rootPath, s3Options, ...legacyS3Options });
-    const s3Client = new S3Client(config);
+    const s3Client = new clientS3.S3Client(config);
     const filePrefix = rootPath ? `${rootPath.replace(/\/+$/, "")}/` : "";
-
     const getFileKey = (file) => {
       const path = file.path ? `${file.path}/` : "";
       return `${filePrefix}${path}${file.hash}${file.ext}`;
     };
-
+    // const uploadss = async (file, customParams = {}) => {
+    //   const fileKey = getFileKey(file);
+    //   const uploadObj = new libStorage.Upload({
+    //     client: s3Client,
+    //     params: {
+    //       Bucket: config.params.Bucket,
+    //       Key: fileKey,
+    //       Body: file.stream || Buffer.from(file.buffer, "binary"),
+    //       ACL: config.params.ACL,
+    //       ContentType: file.mime,
+    //       ...customParams
+    //     }
+    //   });
+    //   const upload2 = await uploadObj.done();
+    //   if (assertUrlProtocol(upload2.Location)) {
+    //     file.url = baseUrl ? `${baseUrl}/${fileKey}` : upload2.Location;
+    //   } else {
+    //     file.url = `https://${upload2.Location}`;
+    //   }
+    // };
     const upload = async (file, customParams = {}) => {
       const fileKey = getFileKey(file);
+      const { Bucket, ACL } = config.params;
+
+      const params = {
+        Bucket,
+        Key: fileKey,
+        ACL,
+        ContentType: file.mime,
+        ...customParams,
+      };
+
+      const buffer = file.stream ? await streamToBuffer(file.stream) : file.buffer;
+      const partSize = 5 * 1024 * 1024; // 5 MB parts
+      const numParts = Math.ceil(buffer.length / partSize);
+      const uploadId = await initiateMultipartUpload(s3Client, params);
 
       try {
-        const params = {
-          Bucket: config.params.Bucket,
-          Key: fileKey,
-          Body: file.stream || Buffer.from(file.buffer, "binary"),
-          ACL: config.params.ACL,
-          ContentType: file.mime,
-          ...customParams,
-        };
+        const uploadPromises = [];
 
-        // Check for file size and use multipart upload if necessary
-        if (file.stream && file.stream.length > 5 * 1024 * 1024) {
-          const uploadId = await initiateMultipartUpload(fileKey);
-          await uploadParts(file.stream, uploadId);
-          await completeMultipartUpload(fileKey, uploadId);
-        } else {
-          const command = new PutObjectCommand(params);
-          await s3Client.send(command);
+        for (let i = 0; i < numParts; i++) {
+          const start = i * partSize;
+          const end = Math.min(start + partSize, buffer.length);
+          const partBuffer = buffer.slice(start, end);
+
+          const uploadPartPromise = s3Client.send(
+            new UploadPartCommand({
+              Bucket,
+              Key: fileKey,
+              UploadId: uploadId,
+              Body: partBuffer,
+              PartNumber: i + 1,
+            })
+          );
+
+          uploadPromises.push(uploadPartPromise);
         }
 
-        if (assertUrlProtocol(params.Location)) {
-          file.url = baseUrl ? `${baseUrl}/${fileKey}` : params.Location;
-        } else {
-          file.url = `https://${params.Location}`;
+        const uploadPartResponses = await Promise.all(uploadPromises);
+
+        const completedUploadResponse = await completeMultipartUpload(
+          s3Client,
+          Bucket,
+          fileKey,
+          uploadId,
+          uploadPartResponses
+        );
+
+        const fileUrl = assertUrlProtocol(completedUploadResponse.Location)
+          ? baseUrl
+            ? `${baseUrl}/${fileKey}`
+            : completedUploadResponse.Location
+          : `https://${completedUploadResponse.Location}`;
+
+        file.url = fileUrl;
+      } catch (error) {
+        console.error("Error uploading large file:", error);
+
+        if (uploadId) {
+          await abortMultipartUpload(s3Client, Bucket, fileKey, uploadId);
         }
-      } catch (err) {
-        console.error("Upload failed:", err);
-        throw err; // Re-throw to allow for proper error handling
       }
     };
 
-    const initiateMultipartUpload = async (fileKey) => {
-      const command = new CreateMultipartUploadCommand({
-        Bucket: config.params.Bucket,
-        Key: fileKey,
-      });
-      const multipartUpload = await s3Client.send(command);
-      return multipartUpload.UploadId;
+    const initiateMultipartUpload = async (s3Client, params) => {
+      const { UploadId } = await s3Client.send(new CreateMultipartUploadCommand(params));
+      return UploadId;
     };
 
-    const uploadParts = async (fileStream, uploadId) => {
-      const partSize = 5 * 1024 * 1024; // 5 MB parts
-      let partNumber = 1;
-      let chunk;
+    const completeMultipartUpload = async (s3Client, Bucket, Key, UploadId, uploadPartResponses) => {
+      return s3Client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket,
+          Key,
+          UploadId,
+          MultipartUpload: {
+            Parts: uploadPartResponses.map(({ ETag }, i) => ({
+              ETag,
+              PartNumber: i + 1,
+            })),
+          },
+        })
+      );
+    };
 
-      while ((chunk = fileStream.read(partSize)) !== null) {
-        const command = new UploadPartCommand({
-          Bucket: config.params.Bucket,
-          Key: fileKey,
-          UploadId: uploadId,
-          Body: chunk,
-          PartNumber: partNumber,
-        });
-        await s3Client.send(command);
-        partNumber++;
+    const abortMultipartUpload = async (s3Client, Bucket, Key, UploadId) => {
+      await s3Client.send(
+        new AbortMultipartUploadCommand({
+          Bucket,
+          Key,
+          UploadId,
+        })
+      );
+    };
+
+    const streamToBuffer = async (stream) => {
+      const chunks = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
       }
+      return Buffer.concat(chunks);
     };
 
-    const completeMultipartUpload = async (fileKey, uploadId) => {
-      const command = new CompleteMultipartUploadCommand({
-        Bucket: config.params.Bucket,
-        Key: fileKey,
-        UploadId: uploadId,
-      });
-      await s3Client.send(command);
-    };
+    
     return {
       isPrivate() {
         return config.params.ACL === "private";
