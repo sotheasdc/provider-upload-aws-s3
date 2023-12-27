@@ -54,8 +54,7 @@
   },
   "devDependencies": {
     "@strapi/pack-up": "4.16.2",
-    "@types/jest": "29.5.2",
-    "tsconfig": "4.16.2"
+    "@types/jest": "29.5.2"
   },
   "engines": {
     "node": ">=18.0.0 <=20.x.x",
