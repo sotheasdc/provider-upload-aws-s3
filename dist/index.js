@@ -98,89 +98,92 @@ const index = {
       const path = file.path ? `${file.path}/` : "";
       return `${filePrefix}${path}${file.hash}${file.ext}`;
     };
-    // const uploadss = async (file, customParams = {}) => {
-    //   const fileKey = getFileKey(file);
-    //   const uploadObj = new libStorage.Upload({
-    //     client: s3Client,
-    //     params: {
-    //       Bucket: config.params.Bucket,
-    //       Key: fileKey,
-    //       Body: file.stream || Buffer.from(file.buffer, "binary"),
-    //       ACL: config.params.ACL,
-    //       ContentType: file.mime,
-    //       ...customParams
-    //     }
-    //   });
-    //   const upload2 = await uploadObj.done();
-    //   if (assertUrlProtocol(upload2.Location)) {
-    //     file.url = baseUrl ? `${baseUrl}/${fileKey}` : upload2.Location;
-    //   } else {
-    //     file.url = `https://${upload2.Location}`;
-    //   }
-    // };
     const upload = async (file, customParams = {}) => {
+      console.log('stream',file.stream)
+      console.log('buffer',file.buffer)
       const fileKey = getFileKey(file);
-      const { Bucket, ACL } = config.params;
-
-      const params = {
-        Bucket,
-        Key: fileKey,
-        ACL,
-        ContentType: file.mime,
-        ...customParams,
-      };
-
-      const buffer = file.stream ? await streamToBuffer(file.stream) : file.buffer;
-      const partSize = 5 * 1024 * 1024; // 5 MB parts
-      const numParts = Math.ceil(buffer.length / partSize);
-      const uploadId = await initiateMultipartUpload(s3Client, params);
-
-      try {
-        const uploadPromises = [];
-
-        for (let i = 0; i < numParts; i++) {
-          const start = i * partSize;
-          const end = Math.min(start + partSize, buffer.length);
-          const partBuffer = buffer.slice(start, end);
-
-          const uploadPartPromise = s3Client.send(
-            new UploadPartCommand({
-              Bucket,
-              Key: fileKey,
-              UploadId: uploadId,
-              Body: partBuffer,
-              PartNumber: i + 1,
-            })
-          );
-
-          uploadPromises.push(uploadPartPromise);
+   
+      const uploadObj = new libStorage.Upload({
+        client: s3Client,
+        params: {
+          Bucket: config.params.Bucket,
+          Key: fileKey,
+          Body: file.stream || Buffer.from(file.buffer, "binary"),
+          ACL: config.params.ACL,
+          ContentType: file.mime,
+          ...customParams
         }
-
-        const uploadPartResponses = await Promise.all(uploadPromises);
-
-        const completedUploadResponse = await completeMultipartUpload(
-          s3Client,
-          Bucket,
-          fileKey,
-          uploadId,
-          uploadPartResponses
-        );
-
-        const fileUrl = assertUrlProtocol(completedUploadResponse.Location)
-          ? baseUrl
-            ? `${baseUrl}/${fileKey}`
-            : completedUploadResponse.Location
-          : `https://${completedUploadResponse.Location}`;
-
-        file.url = fileUrl;
-      } catch (error) {
-        console.error("Error uploading large file:", error);
-
-        if (uploadId) {
-          await abortMultipartUpload(s3Client, Bucket, fileKey, uploadId);
-        }
+      });
+      const upload2 = await uploadObj.done();
+      if (assertUrlProtocol(upload2.Location)) {
+        file.url = baseUrl ? `${baseUrl}/${fileKey}` : upload2.Location;
+      } else {
+        file.url = `https://${upload2.Location}`;
       }
     };
+    // const upload = async (file, customParams = {}) => {
+    //   const fileKey = getFileKey(file);
+    //   const { Bucket, ACL } = config.params;
+
+    //   const params = {
+    //     Bucket,
+    //     Key: fileKey,
+    //     ACL,
+    //     ContentType: file.mime,
+    //     ...customParams,
+    //   };
+
+    //   const buffer = file.stream ? await streamToBuffer(file.stream) : file.buffer;
+    //   const partSize = 5 * 1024 * 1024; // 5 MB parts
+    //   const numParts = Math.ceil(buffer.length / partSize);
+    //   const uploadId = await initiateMultipartUpload(s3Client, params);
+
+    //   try {
+    //     const uploadPromises = [];
+
+    //     for (let i = 0; i < numParts; i++) {
+    //       const start = i * partSize;
+    //       const end = Math.min(start + partSize, buffer.length);
+    //       const partBuffer = buffer.slice(start, end);
+
+    //       const uploadPartPromise = s3Client.send(
+    //         new UploadPartCommand({
+    //           Bucket,
+    //           Key: fileKey,
+    //           UploadId: uploadId,
+    //           Body: partBuffer,
+    //           PartNumber: i + 1,
+    //         })
+    //       );
+
+    //       uploadPromises.push(uploadPartPromise);
+    //     }
+
+    //     const uploadPartResponses = await Promise.all(uploadPromises);
+
+    //     const completedUploadResponse = await completeMultipartUpload(
+    //       s3Client,
+    //       Bucket,
+    //       fileKey,
+    //       uploadId,
+    //       uploadPartResponses
+    //     );
+
+    //     const fileUrl = assertUrlProtocol(completedUploadResponse.Location)
+    //       ? baseUrl
+    //         ? `${baseUrl}/${fileKey}`
+    //         : completedUploadResponse.Location
+    //       : `https://${completedUploadResponse.Location}`;
+
+    //     file.url = fileUrl;
+    //   } catch (error) {
+    //     console.error("Error uploading large file:", error);
+
+    //     if (uploadId) {
+    //       await abortMultipartUpload(s3Client, Bucket, fileKey, uploadId);
+    //     }
+    //   }
+    // };
 
     const initiateMultipartUpload = async (s3Client, params) => {
       const { UploadId } = await s3Client.send(new CreateMultipartUploadCommand(params));
