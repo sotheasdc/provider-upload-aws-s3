@@ -244,4 +244,3 @@ upload: {
 ```
 
 This configuration ensures compatibility with the updated AWS SDK while providing flexibility in URL format selection, catering to various user needs.
-# provider-upload-aws-s3
